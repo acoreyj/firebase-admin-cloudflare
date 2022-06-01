@@ -38,10 +38,10 @@ const expect = chai.expect;
  * @return {string} A string with a specific number of random characters.
  */
 function createRandomString(numOfChars: number): string {
-  const chars = [];
+  const chars: string[] = [];
   const allowedChars = '1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
   while (numOfChars > 0) {
-    const index = Math.floor(Math.random() * allowedChars.length);
+    const index = Math.floor(Math.random() * allowedChars.length)
     chars.push(allowedChars.charAt(index));
     numOfChars--;
   }

@@ -77,7 +77,7 @@ interface InvalidMultiFactorUpdateTest {
  * @return {string} A string with a specific number of random characters.
  */
 function createRandomString(numOfChars: number): string {
-  const chars = [];
+  const chars: string[] = [];
   const allowedChars = '1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
   while (numOfChars > 0) {
     const index = Math.floor(Math.random() * allowedChars.length);
@@ -1516,7 +1516,7 @@ AUTH_REQUEST_HANDLER_TESTS.forEach((handler) => {
         const stub = sinon.stub(HttpClient.prototype, 'send').resolves(expectedResult);
         stubs.push(stub);
 
-        const testUsers = [];
+        const testUsers: any[] = [];
         for (let i = 0; i < 1000; i++) {
           testUsers.push({
             uid: 'USER' + i.toString(),

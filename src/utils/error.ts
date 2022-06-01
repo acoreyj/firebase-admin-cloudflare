@@ -148,7 +148,7 @@ export class FirebaseAuthError extends PrefixedFirebaseError {
     // serverErrorCode could contain additional details:
     // ERROR_CODE : Detailed message which can also contain colons
     const colonSeparator = (serverErrorCode || '').indexOf(':');
-    let customMessage = null;
+    let customMessage: string | null = null;
     if (colonSeparator !== -1) {
       customMessage = serverErrorCode.substring(colonSeparator + 1).trim();
       serverErrorCode = serverErrorCode.substring(0, colonSeparator).trim();

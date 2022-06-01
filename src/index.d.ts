@@ -19,5 +19,4 @@ import * as admin from './default-namespace';
 
 declare module 'firebase-admin' {
 }
-
 export = admin;

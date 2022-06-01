@@ -233,7 +233,7 @@ function mockTopicSubscriptionRequest(
   successCount = 1,
   failureCount = 0,
 ): nock.Scope {
-  const mockedResults = [];
+  const mockedResults: any[] = [];
 
   for (let i = 0; i < successCount; i++) {
     mockedResults.push({});

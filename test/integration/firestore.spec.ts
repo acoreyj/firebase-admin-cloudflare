@@ -169,7 +169,7 @@ describe('admin.firestore', () => {
         const data = snapshot.data();
         expect(data).to.exist;
         expect(data!.sisterCity.path).to.deep.equal(source.path);
-        const promises = [];
+        const promises: any[] = [];
         promises.push(source.delete());
         promises.push(target.delete());
         return Promise.all(promises);

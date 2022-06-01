@@ -177,8 +177,9 @@
     "@firebase/database-types": "^0.9.7",
     "@types/node": ">=12.12.47",
     "dicer": "^0.3.0",
+    "jose": "^4.8.1",
     "jsonwebtoken": "^8.5.1",
-    "jwks-rsa": "^2.0.2",
+    "node-fetch": "^2",
     "node-forge": "^1.3.1",
     "uuid": "^8.3.2"
   },

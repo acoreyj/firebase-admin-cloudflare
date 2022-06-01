@@ -94,7 +94,7 @@ export class DatabaseService {
       clearTimeout(this.tokenRefreshTimeout);
     }
 
-    const promises = [];
+    const promises: Promise<void>[] = [];
     for (const dbUrl of Object.keys(this.databases)) {
       const db: DatabaseImpl = ((this.databases[dbUrl] as any) as DatabaseImpl);
       promises.push(db.INTERNAL.delete());

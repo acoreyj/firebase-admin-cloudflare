@@ -1,3 +1,5 @@
+/* eslint-disable max-len */
+/* eslint-disable @typescript-eslint/explicit-function-return-type */
 /*!
  * Copyright 2021 Google Inc.
  *
@@ -16,9 +18,11 @@
 
 import * as validator from './validator';
 import * as jwt from 'jsonwebtoken';
-import * as jwks from 'jwks-rsa';
+import * as jose from 'jose';
+
 import { HttpClient, HttpRequestConfig, HttpError } from '../utils/api-request';
 import { Agent } from 'http';
+import { RemoteJWKSet } from './remote';
 
 export const ALGORITHM_RS256: jwt.Algorithm = 'RS256' as const;
 
@@ -33,12 +37,12 @@ const NO_KID_IN_HEADER_ERROR_MESSAGE = 'no-kid-in-header-error';
 
 const HOUR_IN_SECONDS = 3600;
 
-export type Dictionary = { [key: string]: any }
+export type Dictionary = { [key: string]: any };
 
 export type DecodedToken = {
   header: Dictionary;
   payload: Dictionary;
-}
+};
 
 export interface SignatureVerifier {
   verify(token: string): Promise<void>;
@@ -51,17 +55,14 @@ interface KeyFetcher {
 export class JwksFetcher implements KeyFetcher {
   private publicKeys: { [key: string]: string };
   private publicKeysExpireAt = 0;
-  private client: jwks.JwksClient;
+  private client: RemoteJWKSet;
 
   constructor(jwksUrl: string) {
     if (!validator.isURL(jwksUrl)) {
       throw new Error('The provided JWKS URL is not a valid URL.');
     }
 
-    this.client = jwks({
-      jwksUri: jwksUrl,
-      cache: false, // disable jwks-rsa LRU cache as the keys are always cached for 6 hours.
-    });
+    this.client = new RemoteJWKSet(new URL(jwksUrl), { cacheMaxAge: Math.max() });
   }
 
   public fetchPublicKeys(): Promise<{ [key: string]: string }> {
@@ -75,21 +76,34 @@ export class JwksFetcher implements KeyFetcher {
     return !this.publicKeys || this.publicKeysExpireAt <= Date.now();
   }
 
-  private refresh(): Promise<{ [key: string]: string }> {
-    return this.client.getSigningKeys()
-      .then((signingKeys) => {
-        // reset expire at from previous set of keys.
-        this.publicKeysExpireAt = 0;
-        const newKeys = signingKeys.reduce((map: { [key: string]: string }, signingKey: jwks.SigningKey) => {
-          map[signingKey.kid] = signingKey.getPublicKey();
-          return map;
-        }, {});
-        this.publicKeysExpireAt = Date.now() + (HOUR_IN_SECONDS * 6 * 1000);
-        this.publicKeys = newKeys;
-        return newKeys;
-      }).catch((err) => {
-        throw new Error(`Error fetching Json Web Keys: ${err.message}`);
-      });
+  private async refresh(): Promise<{ [key: string]: string }> {
+    try {
+      const signingKeys = await this.client.getKeys();
+      this.publicKeysExpireAt = 0;
+
+      const reducer = async (acc: { [key: string]: string }, signingKey: jose.JWK)
+        : Promise<{ [key: string]: string }> => {
+        try {
+          const rsaPublicKey = await jose.importJWK(signingKey, 'PS256') as jose.KeyLike;
+          const key = await jose.exportSPKI(rsaPublicKey);
+          return { ...await acc, [signingKey!.kid!]:key  };
+        } catch (error) {
+          return { ...await acc, [signingKey!.kid!]: JSON.stringify(error) };
+        }
+      }
+      const newKeys: { [key: string]: string } =
+        await (signingKeys.reduce(reducer as unknown as any, {}) as unknown as Promise<{ [key: string]: string }>);
+      this.publicKeysExpireAt = Date.now() + (HOUR_IN_SECONDS * 6 * 1000);
+      this.publicKeys = newKeys;
+      return newKeys;
+    } catch (err) {
+      throw new Error(`Error fetching Json Web Keys: ${err.message}`);
+    }
+
+    // this.client.length;
+    // return new Promise((resolve) => {
+    //   resolve({ key: 'lasjf' });
+    // });
   }
 }
 
@@ -100,10 +114,13 @@ export class UrlKeyFetcher implements KeyFetcher {
   private publicKeys: { [key: string]: string };
   private publicKeysExpireAt = 0;
 
-  constructor(private clientCertUrl: string, private readonly httpAgent?: Agent) {
+  constructor(
+    private clientCertUrl: string,
+    private readonly httpAgent?: Agent
+  ) {
     if (!validator.isURL(clientCertUrl)) {
       throw new Error(
-        'The provided public client certificate URL is not a valid URL.',
+        'The provided public client certificate URL is not a valid URL.'
       );
     }
   }
@@ -136,43 +153,48 @@ export class UrlKeyFetcher implements KeyFetcher {
       url: this.clientCertUrl,
       httpAgent: this.httpAgent,
     };
-    return client.send(request).then((resp) => {
-      if (!resp.isJson() || resp.data.error) {
-        // Treat all non-json messages and messages with an 'error' field as
-        // error responses.
-        throw new HttpError(resp);
-      }
-      // reset expire at from previous set of keys.
-      this.publicKeysExpireAt = 0;
-      if (Object.prototype.hasOwnProperty.call(resp.headers, 'cache-control')) {
-        const cacheControlHeader: string = resp.headers['cache-control'];
-        const parts = cacheControlHeader.split(',');
-        parts.forEach((part) => {
-          const subParts = part.trim().split('=');
-          if (subParts[0] === 'max-age') {
-            const maxAge: number = +subParts[1];
-            this.publicKeysExpireAt = Date.now() + (maxAge * 1000);
-          }
-        });
-      }
-      this.publicKeys = resp.data;
-      return resp.data;
-    }).catch((err) => {
-      if (err instanceof HttpError) {
-        let errorMessage = 'Error fetching public keys for Google certs: ';
-        const resp = err.response;
-        if (resp.isJson() && resp.data.error) {
-          errorMessage += `${resp.data.error}`;
-          if (resp.data.error_description) {
-            errorMessage += ' (' + resp.data.error_description + ')';
-          }
-        } else {
-          errorMessage += `${resp.text}`;
+    return client
+      .send(request)
+      .then((resp) => {
+        if (!resp.isJson() || resp.data.error) {
+          // Treat all non-json messages and messages with an 'error' field as
+          // error responses.
+          throw new HttpError(resp);
         }
-        throw new Error(errorMessage);
-      }
-      throw err;
-    });
+        // reset expire at from previous set of keys.
+        this.publicKeysExpireAt = 0;
+        if (
+          Object.prototype.hasOwnProperty.call(resp.headers, 'cache-control')
+        ) {
+          const cacheControlHeader: string = resp.headers['cache-control'];
+          const parts = cacheControlHeader.split(',');
+          parts.forEach((part) => {
+            const subParts = part.trim().split('=');
+            if (subParts[0] === 'max-age') {
+              const maxAge: number = +subParts[1];
+              this.publicKeysExpireAt = Date.now() + maxAge * 1000;
+            }
+          });
+        }
+        this.publicKeys = resp.data;
+        return resp.data;
+      })
+      .catch((err) => {
+        if (err instanceof HttpError) {
+          let errorMessage = 'Error fetching public keys for Google certs: ';
+          const resp = err.response;
+          if (resp.isJson() && resp.data.error) {
+            errorMessage += `${resp.data.error}`;
+            if (resp.data.error_description) {
+              errorMessage += ' (' + resp.data.error_description + ')';
+            }
+          } else {
+            errorMessage += `${resp.text}`;
+          }
+          throw new Error(errorMessage);
+        }
+        throw err;
+      });
   }
 }
 
@@ -186,8 +208,13 @@ export class PublicKeySignatureVerifier implements SignatureVerifier {
     }
   }
 
-  public static withCertificateUrl(clientCertUrl: string, httpAgent?: Agent): PublicKeySignatureVerifier {
-    return new PublicKeySignatureVerifier(new UrlKeyFetcher(clientCertUrl, httpAgent));
+  public static withCertificateUrl(
+    clientCertUrl: string,
+    httpAgent?: Agent
+  ): PublicKeySignatureVerifier {
+    return new PublicKeySignatureVerifier(
+      new UrlKeyFetcher(clientCertUrl, httpAgent)
+    );
   }
 
   public static withJwksUrl(jwksUrl: string): PublicKeySignatureVerifier {
@@ -196,26 +223,35 @@ export class PublicKeySignatureVerifier implements SignatureVerifier {
 
   public verify(token: string): Promise<void> {
     if (!validator.isString(token)) {
-      return Promise.reject(new JwtError(JwtErrorCode.INVALID_ARGUMENT,
-        'The provided token must be a string.'));
+      return Promise.reject(
+        new JwtError(
+          JwtErrorCode.INVALID_ARGUMENT,
+          'The provided token must be a string.'
+        )
+      );
     }
 
-    return verifyJwtSignature(token, getKeyCallback(this.keyFetcher), { algorithms: [ALGORITHM_RS256] })
-      .catch((error: JwtError) => {
-        if (error.code === JwtErrorCode.NO_KID_IN_HEADER) {
-          // No kid in JWT header. Try with all the public keys.
-          return this.verifyWithoutKid(token);
-        }
-        throw error;
-      });
+    return verifyJwtSignature(token, getKeyCallback(this.keyFetcher), {
+      algorithms: [ALGORITHM_RS256],
+    }).catch((error: JwtError) => {
+      if (error.code === JwtErrorCode.NO_KID_IN_HEADER) {
+        // No kid in JWT header. Try with all the public keys.
+        return this.verifyWithoutKid(token);
+      }
+      throw error;
+    });
   }
 
   private verifyWithoutKid(token: string): Promise<void> {
-    return this.keyFetcher.fetchPublicKeys()
-      .then(publicKeys => this.verifyWithAllKeys(token, publicKeys));
+    return this.keyFetcher
+      .fetchPublicKeys()
+      .then((publicKeys) => this.verifyWithAllKeys(token, publicKeys));
   }
 
-  private verifyWithAllKeys(token: string, keys: { [key: string]: string }): Promise<void> {
+  private verifyWithAllKeys(
+    token: string,
+    keys: { [key: string]: string }
+  ): Promise<void> {
     const promises: Promise<boolean>[] = [];
     Object.values(keys).forEach((key) => {
       const result = verifyJwtSignature(token, key)
@@ -225,16 +261,18 @@ export class PublicKeySignatureVerifier implements SignatureVerifier {
             throw error;
           }
           return false;
-        })
+        });
       promises.push(result);
     });
 
-    return Promise.all(promises)
-      .then((result) => {
-        if (result.every((r) => r === false)) {
-          throw new JwtError(JwtErrorCode.INVALID_SIGNATURE, 'Invalid token signature.');
-        }
-      });
+    return Promise.all(promises).then((result) => {
+      if (result.every((r) => r === false)) {
+        throw new JwtError(
+          JwtErrorCode.INVALID_SIGNATURE,
+          'Invalid token signature.'
+        );
+      }
+    });
   }
 }
 
@@ -260,17 +298,19 @@ function getKeyCallback(fetcher: KeyFetcher): jwt.GetPublicKeyOrSecret {
       callback(new Error(NO_KID_IN_HEADER_ERROR_MESSAGE));
     }
     const kid = header.kid || '';
-    fetcher.fetchPublicKeys().then((publicKeys) => {
-      if (!Object.prototype.hasOwnProperty.call(publicKeys, kid)) {
-        callback(new Error(NO_MATCHING_KID_ERROR_MESSAGE));
-      } else {
-        callback(null, publicKeys[kid]);
-      }
-    })
-      .catch(error => {
+    fetcher
+      .fetchPublicKeys()
+      .then((publicKeys) => {
+        if (!Object.prototype.hasOwnProperty.call(publicKeys, kid)) {
+          callback(new Error(NO_MATCHING_KID_ERROR_MESSAGE));
+        } else {
+          callback(null, publicKeys[kid]);
+        }
+      })
+      .catch((error) => {
         callback(error);
       });
-  }
+  };
 }
 
 /**
@@ -282,26 +322,45 @@ function getKeyCallback(fetcher: KeyFetcher): jwt.GetPublicKeyOrSecret {
  * @param options - JWT verification options.
  * @returns A Promise resolving for a token with a valid signature.
  */
-export function verifyJwtSignature(token: string, secretOrPublicKey: jwt.Secret | jwt.GetPublicKeyOrSecret,
-  options?: jwt.VerifyOptions): Promise<void> {
+export function verifyJwtSignature(
+  token: string,
+  secretOrPublicKey: jwt.Secret | jwt.GetPublicKeyOrSecret,
+  options?: jwt.VerifyOptions
+): Promise<void> {
   if (!validator.isString(token)) {
-    return Promise.reject(new JwtError(JwtErrorCode.INVALID_ARGUMENT,
-      'The provided token must be a string.'));
+    return Promise.reject(
+      new JwtError(
+        JwtErrorCode.INVALID_ARGUMENT,
+        'The provided token must be a string.'
+      )
+    );
   }
 
   return new Promise((resolve, reject) => {
-    jwt.verify(token, secretOrPublicKey, options,
+    jwt.verify(
+      token,
+      secretOrPublicKey,
+      options,
       (error: jwt.VerifyErrors | null) => {
         if (!error) {
           return resolve();
         }
         if (error.name === 'TokenExpiredError') {
-          return reject(new JwtError(JwtErrorCode.TOKEN_EXPIRED,
-            'The provided token has expired. Get a fresh token from your ' +
-            'client app and try again.'));
+          return reject(
+            new JwtError(
+              JwtErrorCode.TOKEN_EXPIRED,
+              'The provided token has expired. Get a fresh token from your ' +
+                'client app and try again.'
+            )
+          );
         } else if (error.name === 'JsonWebTokenError') {
-          if (error.message && error.message.includes(JWT_CALLBACK_ERROR_PREFIX)) {
-            const message = error.message.split(JWT_CALLBACK_ERROR_PREFIX).pop() || 'Error fetching public keys.';
+          if (
+            error.message &&
+            error.message.includes(JWT_CALLBACK_ERROR_PREFIX)
+          ) {
+            const message =
+              error.message.split(JWT_CALLBACK_ERROR_PREFIX).pop() ||
+              'Error fetching public keys.';
             let code = JwtErrorCode.KEY_FETCH_ERROR;
             if (message === NO_MATCHING_KID_ERROR_MESSAGE) {
               code = JwtErrorCode.NO_MATCHING_KID;
@@ -311,8 +370,11 @@ export function verifyJwtSignature(token: string, secretOrPublicKey: jwt.Secret 
             return reject(new JwtError(code, message));
           }
         }
-        return reject(new JwtError(JwtErrorCode.INVALID_SIGNATURE, error.message));
-      });
+        return reject(
+          new JwtError(JwtErrorCode.INVALID_SIGNATURE, error.message)
+        );
+      }
+    );
   });
 }
 
@@ -324,8 +386,12 @@ export function verifyJwtSignature(token: string, secretOrPublicKey: jwt.Secret 
  */
 export function decodeJwt(jwtToken: string): Promise<DecodedToken> {
   if (!validator.isString(jwtToken)) {
-    return Promise.reject(new JwtError(JwtErrorCode.INVALID_ARGUMENT,
-      'The provided token must be a string.'));
+    return Promise.reject(
+      new JwtError(
+        JwtErrorCode.INVALID_ARGUMENT,
+        'The provided token must be a string.'
+      )
+    );
   }
 
   const fullDecodedToken: any = jwt.decode(jwtToken, {
@@ -333,8 +399,9 @@ export function decodeJwt(jwtToken: string): Promise<DecodedToken> {
   });
 
   if (!fullDecodedToken) {
-    return Promise.reject(new JwtError(JwtErrorCode.INVALID_ARGUMENT,
-      'Decoding token failed.'));
+    return Promise.reject(
+      new JwtError(JwtErrorCode.INVALID_ARGUMENT, 'Decoding token failed.')
+    );
   }
 
   const header = fullDecodedToken?.header;
