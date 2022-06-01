@@ -19,7 +19,7 @@ import { deepCopy } from '../utils/deep-copy';
 import { isNonNullObject } from '../utils/validator';
 import * as utils from '../utils';
 import { AuthClientErrorCode, FirebaseAuthError } from '../utils/error';
-
+import { Buffer } from 'buffer';
 /**
  * 'REDACTED', encoded as a base64 string.
  */
