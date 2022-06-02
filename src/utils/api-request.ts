@@ -18,14 +18,10 @@
 import { FirebaseApp } from '../app/firebase-app';
 import { AppErrorCodes, FirebaseAppError } from './error';
 import * as validator from './validator';
-
-import http = require('http');
-import https = require('https');
+import * as http from 'http';
+import * as https from 'https';
 import url = require('url');
 import { EventEmitter } from 'events';
-import { Readable } from 'stream';
-import * as zlibmod from 'zlib';
-
 /** Http method type definition. */
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD';
 /** API callback function type definition. */
@@ -66,8 +62,8 @@ export interface HttpResponse {
 
 interface LowLevelResponse {
   status: number;
-  headers: http.IncomingHttpHeaders;
-  request: http.ClientRequest | null;
+  headers: Headers;
+  request: https.RequestOptions | null;
   data?: string;
   multipart?: Buffer[];
   config: HttpRequestConfig;
@@ -434,7 +430,7 @@ export function parseHttpResponse(
 
   const lowLevelResponse: LowLevelResponse = {
     status: parseInt(status, 10),
-    headers,
+    headers: new Headers(headers),
     data,
     config,
     request: null,
@@ -482,171 +478,54 @@ class AsyncHttpCall {
     }
   }
 
-  private execute(): void {
-    const transport: any = this.options.protocol === 'https:' ? https : http;
-    const req: http.ClientRequest = transport.request(this.options, (res: http.IncomingMessage) => {
-      this.handleResponse(res, req);
-    });
+  private async execute(): Promise<void> {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+        this.rejectWithError(`timeout of ${this.config.timeout}ms exceeded`, 'ETIMEDOUT');
+      }, this.config.timeout);
 
-    // Handle errors
-    req.on('error', (err) => {
-      if (req.aborted) {
-        return;
-      }
-      this.enhanceAndReject(err, null, req);
-    });
+      const res = await fetch(
+        `${this.options.protocol}//${this.options.hostname}:${this.options.port}${this.options.path}`, {
+          method: this.options.method || 'GET',
+          headers: new Headers(this.options.headers as Record<string, string> || {}),
+          signal: controller.signal,
+          body: this.entity
+        });
+      this.handleResponse(res, this.options);
+      clearTimeout(timeoutId);
 
-    const timeout: number | undefined = this.config.timeout;
-    const timeoutCallback: () => void = () => {
-      req.abort();
-      this.rejectWithError(`timeout of ${timeout}ms exceeded`, 'ETIMEDOUT', req);
-    };
-    if (timeout) {
-      // Listen to timeouts and throw an error.
-      req.setTimeout(timeout, timeoutCallback);
-      req.on('socket', (socket) => {
-        socket.setTimeout(timeout, timeoutCallback);
-      });
+    } catch (err) {
+      this.enhanceAndReject(err, null);
     }
 
-    // Send the request
-    req.end(this.entity);
+
+
+
+
   }
 
-  private handleResponse(res: http.IncomingMessage, req: http.ClientRequest): void {
-    if (req.aborted) {
-      return;
-    }
+  private handleResponse(res: Response, req: https.RequestOptions): void {
 
-    if (!res.statusCode) {
+    if (!res.ok || !res.status) {
       throw new FirebaseAppError(
         AppErrorCodes.INTERNAL_ERROR,
         'Expected a statusCode on the response from a ClientRequest');
     }
 
     const response: LowLevelResponse = {
-      status: res.statusCode,
+      status: res.status,
       headers: res.headers,
-      request: req,
       data: undefined,
       config: this.config,
+      request: req,
     };
-    const boundary = this.getMultipartBoundary(res.headers);
-    const respStream: Readable = this.uncompressResponse(res);
-
-    if (boundary) {
-      this.handleMultipartResponse(response, respStream, boundary);
-    } else {
-      this.handleRegularResponse(response, respStream);
-    }
-  }
-
-  /**
-   * Extracts multipart boundary from the HTTP header. The content-type header of a multipart
-   * response has the form 'multipart/subtype; boundary=string'.
-   *
-   * If the content-type header does not exist, or does not start with
-   * 'multipart/', then null will be returned.
-   */
-  private getMultipartBoundary(headers: http.IncomingHttpHeaders): string | null {
-    const contentType = headers['content-type'];
-    if (!contentType || !contentType.startsWith('multipart/')) {
-      return null;
-    }
-
-    const segments: string[] = contentType.split(';');
-    const emptyObject: {[key: string]: string} = {};
-    const headerParams = segments.slice(1)
-      .map((segment) => segment.trim().split('='))
-      .reduce((curr, params) => {
-        // Parse key=value pairs in the content-type header into properties of an object.
-        if (params.length === 2) {
-          const keyValuePair: {[key: string]: string} = {};
-          keyValuePair[params[0]] = params[1];
-          return Object.assign(curr, keyValuePair);
-        }
-        return curr;
-      }, emptyObject);
-
-    return headerParams.boundary;
-  }
-
-  private uncompressResponse(res: http.IncomingMessage): Readable {
-    // Uncompress the response body transparently if required.
-    let respStream: Readable = res;
-    const encodings = ['gzip', 'compress', 'deflate'];
-    if (res.headers['content-encoding'] && encodings.indexOf(res.headers['content-encoding']) !== -1) {
-      // Add the unzipper to the body stream processing pipeline.
-      const zlib: typeof zlibmod = require('zlib'); // eslint-disable-line @typescript-eslint/no-var-requires
-      respStream = respStream.pipe(zlib.createUnzip());
-      // Remove the content-encoding in order to not confuse downstream operations.
-      delete res.headers['content-encoding'];
-    }
-    return respStream;
-  }
-
-  private handleMultipartResponse(
-    response: LowLevelResponse, respStream: Readable, boundary: string): void {
-
-    const dicer = require('dicer'); // eslint-disable-line @typescript-eslint/no-var-requires
-    const multipartParser = new dicer({ boundary });
-    const responseBuffer: Buffer[] = [];
-    multipartParser.on('part', (part: any) => {
-      const tempBuffers: Buffer[] = [];
-
-      part.on('data', (partData: Buffer) => {
-        tempBuffers.push(partData);
-      });
-
-      part.on('end', () => {
-        responseBuffer.push(Buffer.concat(tempBuffers));
-      });
-    });
-
-    multipartParser.on('finish', () => {
-      response.data = undefined;
-      response.multipart = responseBuffer;
-      this.finalizeResponse(response);
-    });
-
-    respStream.pipe(multipartParser);
-  }
-
-  private handleRegularResponse(response: LowLevelResponse, respStream: Readable): void {
-    const responseBuffer: Buffer[] = [];
-    respStream.on('data', (chunk: Buffer) => {
-      responseBuffer.push(chunk);
-    });
-
-    respStream.on('error', (err) => {
-      const req: http.ClientRequest | null = response.request;
-      if (req && req.aborted) {
-        return;
-      }
-      this.enhanceAndReject(err, null, req);
-    });
-
-    respStream.on('end', () => {
-      response.data = Buffer.concat(responseBuffer).toString();
-      this.finalizeResponse(response);
-    });
-  }
-
-  /**
-   * Finalizes the current HTTP call in-flight by either resolving or rejecting the associated
-   * promise. In the event of an error, adds additional useful information to the returned error.
-   */
-  private finalizeResponse(response: LowLevelResponse): void {
-    if (response.status >= 200 && response.status < 300) {
+    
+    res.text().then((text => {
+      response.data = text;
       this.resolve(response);
-    } else {
-      this.rejectWithError(
-        'Request failed with status code ' + response.status,
-        null,
-        response.request,
-        response,
-      );
-    }
+    }));
   }
 
   /**

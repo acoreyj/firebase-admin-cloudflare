@@ -13,7 +13,7 @@
     "strictNullChecks": true,
     "strictFunctionTypes": true,
     //"strictPropertyInitialization": true,
-    "lib": ["es2018"],
+    "lib": ["DOM", "DOM.Iterable", "ES2019"],
     "outDir": "lib",
     "stripInternal": true,
     "rootDir": "."
