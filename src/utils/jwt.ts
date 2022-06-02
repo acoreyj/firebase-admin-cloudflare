@@ -22,7 +22,7 @@ import * as jose from 'jose';
 
 import { HttpClient, HttpRequestConfig, HttpError } from '../utils/api-request';
 import { Agent } from 'http';
-import { RemoteJWKSet } from './remote';
+import { GetKeyFunction } from 'jose/dist/types/types';
 
 export const ALGORITHM_RS256: jwt.Algorithm = 'RS256' as const;
 
@@ -35,7 +35,6 @@ const JWT_CALLBACK_ERROR_PREFIX = 'error in secret or public key callback: ';
 const NO_MATCHING_KID_ERROR_MESSAGE = 'no-matching-kid-error';
 const NO_KID_IN_HEADER_ERROR_MESSAGE = 'no-kid-in-header-error';
 
-const HOUR_IN_SECONDS = 3600;
 
 export type Dictionary = { [key: string]: any };
 
@@ -45,68 +44,12 @@ export type DecodedToken = {
 };
 
 export interface SignatureVerifier {
-  verify(token: string): Promise<void>;
+  verify(token: string): Promise<any>;
 }
 
 interface KeyFetcher {
   fetchPublicKeys(): Promise<{ [key: string]: string }>;
 }
-
-export class JwksFetcher implements KeyFetcher {
-  private publicKeys: { [key: string]: string };
-  private publicKeysExpireAt = 0;
-  private client: RemoteJWKSet;
-
-  constructor(jwksUrl: string) {
-    if (!validator.isURL(jwksUrl)) {
-      throw new Error('The provided JWKS URL is not a valid URL.');
-    }
-
-    this.client = new RemoteJWKSet(new URL(jwksUrl), { cacheMaxAge: Math.max() });
-  }
-
-  public fetchPublicKeys(): Promise<{ [key: string]: string }> {
-    if (this.shouldRefresh()) {
-      return this.refresh();
-    }
-    return Promise.resolve(this.publicKeys);
-  }
-
-  private shouldRefresh(): boolean {
-    return !this.publicKeys || this.publicKeysExpireAt <= Date.now();
-  }
-
-  private async refresh(): Promise<{ [key: string]: string }> {
-    try {
-      const signingKeys = await this.client.getKeys();
-      this.publicKeysExpireAt = 0;
-
-      const reducer = async (acc: { [key: string]: string }, signingKey: jose.JWK)
-        : Promise<{ [key: string]: string }> => {
-        try {
-          const rsaPublicKey = await jose.importJWK(signingKey, 'PS256') as jose.KeyLike;
-          const key = await jose.exportSPKI(rsaPublicKey);
-          return { ...await acc, [signingKey!.kid!]:key  };
-        } catch (error) {
-          return { ...await acc, [signingKey!.kid!]: JSON.stringify(error) };
-        }
-      }
-      const newKeys: { [key: string]: string } =
-        await (signingKeys.reduce(reducer as unknown as any, {}) as unknown as Promise<{ [key: string]: string }>);
-      this.publicKeysExpireAt = Date.now() + (HOUR_IN_SECONDS * 6 * 1000);
-      this.publicKeys = newKeys;
-      return newKeys;
-    } catch (err) {
-      throw new Error(`Error fetching Json Web Keys: ${err.message}`);
-    }
-
-    // this.client.length;
-    // return new Promise((resolve) => {
-    //   resolve({ key: 'lasjf' });
-    // });
-  }
-}
-
 /**
  * Class to fetch public keys from a client certificates URL.
  */
@@ -202,7 +145,9 @@ export class UrlKeyFetcher implements KeyFetcher {
  * Class for verifying JWT signature with a public key.
  */
 export class PublicKeySignatureVerifier implements SignatureVerifier {
-  constructor(private keyFetcher: KeyFetcher) {
+  // eslint-disable-next-line @typescript-eslint/naming-convention
+  constructor(private keyFetcher: KeyFetcher | null, private JWKS: null | GetKeyFunction<jose.JWSHeaderParameters, jose.FlattenedJWSInput>
+  ) {
     if (!validator.isNonNullObject(keyFetcher)) {
       throw new Error('The provided key fetcher is not an object or null.');
     }
@@ -213,15 +158,17 @@ export class PublicKeySignatureVerifier implements SignatureVerifier {
     httpAgent?: Agent
   ): PublicKeySignatureVerifier {
     return new PublicKeySignatureVerifier(
-      new UrlKeyFetcher(clientCertUrl, httpAgent)
+      new UrlKeyFetcher(clientCertUrl, httpAgent),
+      null
     );
   }
 
   public static withJwksUrl(jwksUrl: string): PublicKeySignatureVerifier {
-    return new PublicKeySignatureVerifier(new JwksFetcher(jwksUrl));
+    return new PublicKeySignatureVerifier(null, jose.createRemoteJWKSet(new URL(jwksUrl))
+    );
   }
 
-  public verify(token: string): Promise<void> {
+  public verify(token: string): Promise<void | jose.JWTVerifyResult & jose.ResolvedKey> {
     if (!validator.isString(token)) {
       return Promise.reject(
         new JwtError(
@@ -231,18 +178,32 @@ export class PublicKeySignatureVerifier implements SignatureVerifier {
       );
     }
 
-    return verifyJwtSignature(token, getKeyCallback(this.keyFetcher), {
-      algorithms: [ALGORITHM_RS256],
-    }).catch((error: JwtError) => {
-      if (error.code === JwtErrorCode.NO_KID_IN_HEADER) {
-        // No kid in JWT header. Try with all the public keys.
-        return this.verifyWithoutKid(token);
-      }
-      throw error;
-    });
+    if (this.JWKS) {
+      return jose.jwtVerify(token, this.JWKS, {
+        algorithms: [ALGORITHM_RS256],
+
+      }).catch((error: JwtError) => {
+        throw error;
+      });
+    } else if (this.keyFetcher) {
+      return verifyJwtSignature(token, getKeyCallback(this.keyFetcher), {
+        algorithms: [ALGORITHM_RS256],
+      }).catch((error: JwtError) => {
+        if (error.code === JwtErrorCode.NO_KID_IN_HEADER) {
+          // No kid in JWT header. Try with all the public keys.
+          return this.verifyWithoutKid(token);
+        }
+        throw error;
+      });
+    }
+
+    throw new Error('Could not get keays');
   }
 
   private verifyWithoutKid(token: string): Promise<void> {
+    if (!this.keyFetcher) {
+      throw new Error('Could not get keays');
+    }
     return this.keyFetcher
       .fetchPublicKeys()
       .then((publicKeys) => this.verifyWithAllKeys(token, publicKeys));
@@ -280,7 +241,7 @@ export class PublicKeySignatureVerifier implements SignatureVerifier {
  * Class for verifying unsigned (emulator) JWTs.
  */
 export class EmulatorSignatureVerifier implements SignatureVerifier {
-  public verify(token: string): Promise<void> {
+  public verify(token: string): Promise<any> {
     // Signature checks skipped for emulator; no need to fetch public keys.
     return verifyJwtSignature(token, '');
   }
