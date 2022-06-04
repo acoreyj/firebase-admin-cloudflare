@@ -480,21 +480,21 @@ class AsyncHttpCall {
 
   private async execute(): Promise<void> {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => {
-        controller.abort();
-        this.rejectWithError(`timeout of ${this.config.timeout}ms exceeded`, 'ETIMEDOUT');
-      }, this.config.timeout);
-
+      // const controller = new AbortController();
+      // const timeoutId = setTimeout(() => {
+      //   controller.abort();
+      //   this.rejectWithError(`timeout of ${this.config.timeout}ms exceeded`, 'ETIMEDOUT');
+      // }, this.config.timeout || Math.max());
+      //TODO: TIMEOUT
       const res = await fetch(
         `${this.options.protocol}//${this.options.hostname}:${this.options.port}${this.options.path}`, {
           method: this.options.method || 'GET',
           headers: new Headers(this.options.headers as Record<string, string> || {}),
-          signal: controller.signal,
+          //signal: controller.signal,
           body: this.entity
         });
       this.handleResponse(res, this.options);
-      clearTimeout(timeoutId);
+      //clearTimeout(timeoutId);
 
     } catch (err) {
       this.enhanceAndReject(err, null);
@@ -525,7 +525,7 @@ class AsyncHttpCall {
     res.text().then((text => {
       response.data = text;
       this.resolve(response);
-    }));
+    })).catch(e => this.rejectWithError(e));
   }
 
   /**
