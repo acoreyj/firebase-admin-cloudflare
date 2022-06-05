@@ -296,12 +296,76 @@ export function verifyJwtSignature(
       )
     );
   }
-
+  const jwtVerifyGetKey: jose.JWTVerifyGetKey = (protectedHeader: jose.JWTHeaderParameters, token: jose.FlattenedJWSInput): Promise<Buffer> => {
+    return new Promise((resolve, reject) => {
+      const getKeyBuffer = (publicKey: jwt.Secret): Buffer => {
+        if (publicKey instanceof Object && (publicKey as Record<string,string>)?.key) {
+          publicKey = (publicKey as Record<string, string>)?.key;
+        }
+        if (typeof publicKey === 'string') {
+          publicKey = Buffer.from(publicKey, 'base64');
+        }
+        return publicKey as Buffer;
+      }
+      if (typeof secretOrPublicKey === 'function') {
+        secretOrPublicKey(protectedHeader, (err, publicKey) => {
+          if (err || !publicKey) {
+            reject(err);
+          } else {
+            console.log('publicKey bam', publicKey)
+            resolve(getKeyBuffer(publicKey));
+          }
+        });
+      } else {
+        resolve(getKeyBuffer(secretOrPublicKey));
+      }
+     
+    }); 
+  };
   return new Promise((resolve, reject) => {
-    jwt.verify(
+    jose.jwtVerify(
       token,
-      secretOrPublicKey,
-      options,
+      jwtVerifyGetKey,
+      options as jose.JWTVerifyOptions).then(() => {
+      resolve();
+    }).catch((error) => {
+      console.log('error bam', error);
+      if (error) {
+        return reject(
+          new JwtError(JwtErrorCode.INVALID_SIGNATURE, JSON.stringify(error))
+        );
+      }
+      if (error.name === 'TokenExpiredError') {
+        return reject(
+          new JwtError(
+            JwtErrorCode.TOKEN_EXPIRED,
+            'The provided token has expired. Get a fresh token from your ' +
+              'client app and try again.'
+          )
+        );
+      } else if (error.name === 'JsonWebTokenError') {
+        if (
+          error.message &&
+          error.message.includes(JWT_CALLBACK_ERROR_PREFIX)
+        ) {
+          const message =
+            error.message.split(JWT_CALLBACK_ERROR_PREFIX).pop() ||
+            'Error fetching public keys.';
+          let code = JwtErrorCode.KEY_FETCH_ERROR;
+          if (message === NO_MATCHING_KID_ERROR_MESSAGE) {
+            code = JwtErrorCode.NO_MATCHING_KID;
+          } else if (message === NO_KID_IN_HEADER_ERROR_MESSAGE) {
+            code = JwtErrorCode.NO_KID_IN_HEADER;
+          }
+          return reject(new JwtError(code, message));
+        }
+      }
+      return reject(
+        new JwtError(JwtErrorCode.INVALID_SIGNATURE, error.message)
+      );
+      
+    });
+    /* 
       (error: jwt.VerifyErrors | null) => {
         if (!error) {
           return resolve();
@@ -334,8 +398,8 @@ export function verifyJwtSignature(
         return reject(
           new JwtError(JwtErrorCode.INVALID_SIGNATURE, error.message)
         );
-      }
-    );
+    }
+    **/
   });
 }
 
