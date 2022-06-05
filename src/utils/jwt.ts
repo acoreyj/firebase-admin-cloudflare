@@ -19,7 +19,7 @@
 import * as validator from './validator';
 import * as jwt from 'jsonwebtoken';
 import * as jose from 'jose';
-
+import { Buffer } from 'buffer';
 import { HttpClient, HttpRequestConfig, HttpError } from '../utils/api-request';
 import { Agent } from 'http';
 import { GetKeyFunction } from 'jose/dist/types/types';
