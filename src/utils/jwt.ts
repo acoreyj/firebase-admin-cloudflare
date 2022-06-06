@@ -296,28 +296,32 @@ export function verifyJwtSignature(
       )
     );
   }
-  const jwtVerifyGetKey: jose.JWTVerifyGetKey = (protectedHeader: jose.JWTHeaderParameters, token: jose.FlattenedJWSInput): Promise<Buffer> => {
+  const jwtVerifyGetKey: jose.JWTVerifyGetKey = (protectedHeader: jose.JWTHeaderParameters, token: jose.FlattenedJWSInput): Promise<jose.KeyLike> => {
     return new Promise((resolve, reject) => {
-      const getKeyBuffer = (publicKey: jwt.Secret): Buffer => {
+      const getKeyString = (publicKey: jwt.Secret): string => {
         if (publicKey instanceof Object && (publicKey as Record<string,string>)?.key) {
           publicKey = (publicKey as Record<string, string>)?.key;
         }
-        if (typeof publicKey === 'string') {
-          publicKey = Buffer.from(publicKey, 'base64');
+        if (publicKey instanceof Buffer) {
+          publicKey = publicKey.toString('base64');
         }
-        return publicKey as Buffer;
+        return publicKey as string;
       }
       if (typeof secretOrPublicKey === 'function') {
         secretOrPublicKey(protectedHeader, (err, publicKey) => {
           if (err || !publicKey) {
             reject(err);
           } else {
-            console.log('publicKey bam', publicKey)
-            resolve(getKeyBuffer(publicKey));
+            jose.importX509(getKeyString(publicKey), protectedHeader.alg).then(key =>
+              resolve(key)
+            ).catch(err => reject(err));
+            
           }
         });
       } else {
-        resolve(getKeyBuffer(secretOrPublicKey));
+        jose.importX509(getKeyString(secretOrPublicKey), protectedHeader.alg).then(key =>
+          resolve(key)
+        ).catch(err => reject(err));
       }
      
     }); 
@@ -329,7 +333,6 @@ export function verifyJwtSignature(
       options as jose.JWTVerifyOptions).then(() => {
       resolve();
     }).catch((error) => {
-      console.log('error bam', error);
       if (error) {
         return reject(
           new JwtError(JwtErrorCode.INVALID_SIGNATURE, JSON.stringify(error))
