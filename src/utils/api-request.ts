@@ -22,6 +22,8 @@ import * as http from 'http';
 import * as https from 'https';
 import url = require('url');
 import { EventEmitter } from 'events';
+import * as zlibmod from 'zlib';
+
 /** Http method type definition. */
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD';
 /** API callback function type definition. */
@@ -525,11 +527,25 @@ class AsyncHttpCall {
     res
       .text()
       .then((text) => {
-        response.data = text;
+        response.data = this.uncompressResponse(res, text);
         this.resolve(response);
       })
       .catch((e) => this.rejectWithError(e));
   }
+
+  private uncompressResponse(res: Response, respText: string): string {
+    // Uncompress the response body transparently if required.
+    const encodings = ['gzip', 'compress', 'deflate'];
+    if (res.headers['content-encoding'] && encodings.indexOf(res.headers['content-encoding']) !== -1) {
+      // Add the unzipper to the body stream processing pipeline.
+      const zlib: typeof zlibmod = require('zlib'); // eslint-disable-line @typescript-eslint/no-var-requires
+      respText = zlib.unzipSync(respText).toString('utf8');
+      // Remove the content-encoding in order to not confuse downstream operations.
+      delete res.headers['content-encoding'];
+    }
+    return respText;
+  }
+
 
   /**
    * Creates a new error from the given message, and enhances it with other information available.
