@@ -52,7 +52,6 @@ const GCLOUD_CREDENTIAL_PATH = configDir && path.resolve(configDir, GCLOUD_CREDE
 const REFRESH_TOKEN_HOST = 'www.googleapis.com';
 const REFRESH_TOKEN_PATH = '/oauth2/v4/token';
 
-const ONE_HOUR_IN_SECONDS = 60 * 60;
 const JWT_ALGORITHM = 'RS256';
 
 /**
@@ -127,7 +126,7 @@ export class ServiceAccountCredential implements Credential {
       .setIssuedAt()
       .setIssuer(this.clientEmail)
       .setAudience(GOOGLE_TOKEN_AUDIENCE)
-      .setExpirationTime(ONE_HOUR_IN_SECONDS)
+      .setExpirationTime('1h')
       .sign(privateKey);
     return jwt;
   }
