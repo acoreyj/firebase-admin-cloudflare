@@ -117,19 +117,17 @@ export class ServiceAccountCredential implements Credential {
         'https://www.googleapis.com/auth/userinfo.email',
       ].join(' '),
     };
-
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const jose = require('jose');
-
-    const privateKey = await jose.importPKCS8(this.privateKey, JWT_ALGORITHM);
-    const jwt = await new jose.SignJWT(claims)
-      .setProtectedHeader({ alg: JWT_ALGORITHM })
-      .setIssuedAt()
-      .setIssuer(this.clientEmail)
-      .setAudience(GOOGLE_TOKEN_AUDIENCE)
-      .setExpirationTime(ONE_HOUR_IN_SECONDS)
-      .sign(privateKey);
-    return jwt;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    require('crypto');
+    const jwt = require('jsonwebtoken');
+    // This method is actually synchronous so we can capture and return the buffer.
+    return jwt.sign(claims, this.privateKey, {
+      audience: GOOGLE_TOKEN_AUDIENCE,
+      expiresIn: ONE_HOUR_IN_SECONDS,
+      issuer: this.clientEmail,
+      algorithm: JWT_ALGORITHM,
+    });
   }
 }
 

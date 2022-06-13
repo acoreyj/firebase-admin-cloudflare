@@ -493,7 +493,7 @@ class AsyncHttpCall {
           method: this.options.method || 'GET',
           headers: new Headers(this.options.headers as Record<string, string> || {}),
           signal: controller.signal,
-          body: this.entity
+          body: this.entity as Buffer
         });
       this.handleResponse(res, this.options);
       clearTimeout(timeoutId);
@@ -501,11 +501,6 @@ class AsyncHttpCall {
     } catch (err) {
       this.enhanceAndReject(err, null);
     }
-
-
-
-
-
   }
 
   private handleResponse(res: Response, req: https.RequestOptions): void {
