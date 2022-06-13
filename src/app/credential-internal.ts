@@ -92,6 +92,7 @@ export class ServiceAccountCredential implements Credential {
 
   public async getAccessToken(): Promise<GoogleOAuthAccessToken> {
     const token = await this.createAuthJwt_();
+    console.log('wham token',  token)
     const postData = 'grant_type=urn%3Aietf%3Aparams%3Aoauth%3A' +
       'grant-type%3Ajwt-bearer&assertion=' + token;
     const request: HttpRequestConfig = {
@@ -107,7 +108,7 @@ export class ServiceAccountCredential implements Credential {
   }
 
   // eslint-disable-next-line @typescript-eslint/naming-convention
-  private createAuthJwt_(): Promise<string> {
+  private async createAuthJwt_(): Promise<string> {
     const claims = {
       scope: [
         'https://www.googleapis.com/auth/cloud-platform',
@@ -120,13 +121,18 @@ export class ServiceAccountCredential implements Credential {
 
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const jose = require('jose');
-    const jwt = new jose.SignJWT(claims)
+    console.log("wham createJWT");
+
+    const privateKey = await jose.importX509(this.privateKey, JWT_ALGORITHM);
+    console.log("wham privateKey", privateKey);
+    const jwt = await new jose.SignJWT(claims)
       .setProtectedHeader({ alg: JWT_ALGORITHM })
       .setIssuedAt()
       .setIssuer(this.clientEmail)
       .setAudience(GOOGLE_TOKEN_AUDIENCE)
       .setExpirationTime(ONE_HOUR_IN_SECONDS)
-      .sign(this.privateKey);
+      .sign(privateKey);
+    console.log("wham jwt", jwt);
     return jwt;
   }
 }

@@ -296,7 +296,7 @@ export function verifyJwtSignature(
       )
     );
   }
-  const jwtVerifyGetKey: jose.JWTVerifyGetKey = (protectedHeader: jose.JWTHeaderParameters, token: jose.FlattenedJWSInput): Promise<jose.KeyLike> => {
+  const jwtVerifyGetKey: jose.JWTVerifyGetKey = (protectedHeader: jose.JWTHeaderParameters): Promise<jose.KeyLike> => {
     return new Promise((resolve, reject) => {
       const getKeyString = (publicKey: jwt.Secret): string => {
         if (publicKey instanceof Object && (publicKey as Record<string,string>)?.key) {
