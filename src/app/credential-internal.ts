@@ -90,8 +90,8 @@ export class ServiceAccountCredential implements Credential {
     this.httpClient = new HttpClient();
   }
 
-  public getAccessToken(): Promise<GoogleOAuthAccessToken> {
-    const token = this.createAuthJwt_();
+  public async getAccessToken(): Promise<GoogleOAuthAccessToken> {
+    const token = await this.createAuthJwt_();
     const postData = 'grant_type=urn%3Aietf%3Aparams%3Aoauth%3A' +
       'grant-type%3Ajwt-bearer&assertion=' + token;
     const request: HttpRequestConfig = {
@@ -107,7 +107,7 @@ export class ServiceAccountCredential implements Credential {
   }
 
   // eslint-disable-next-line @typescript-eslint/naming-convention
-  private createAuthJwt_(): string {
+  private createAuthJwt_(): Promise<string> {
     const claims = {
       scope: [
         'https://www.googleapis.com/auth/cloud-platform',
@@ -119,14 +119,15 @@ export class ServiceAccountCredential implements Credential {
     };
 
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const jwt = require('jsonwebtoken');
-    // This method is actually synchronous so we can capture and return the buffer.
-    return jwt.sign(claims, this.privateKey, {
-      audience: GOOGLE_TOKEN_AUDIENCE,
-      expiresIn: ONE_HOUR_IN_SECONDS,
-      issuer: this.clientEmail,
-      algorithm: JWT_ALGORITHM,
-    });
+    const jose = require('jose');
+    const jwt = new jose.SignJWT(claims)
+      .setProtectedHeader({ alg: JWT_ALGORITHM })
+      .setIssuedAt()
+      .setIssuer(this.clientEmail)
+      .setAudience(GOOGLE_TOKEN_AUDIENCE)
+      .setExpirationTime(ONE_HOUR_IN_SECONDS)
+      .sign(this.privateKey);
+    return jwt;
   }
 }
 
