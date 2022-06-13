@@ -521,9 +521,113 @@ class AsyncHttpCall {
       config: this.config,
       request: req,
     };
-    
-    res.text().then((text => {
-      response.data = text;
+    const boundary = this.getMultipartBoundary(res.headers);
+    const respStream: Readable = this.uncompressResponse(res);
+
+    if (boundary) {
+      this.handleMultipartResponse(response, respStream, boundary);
+    } else {
+      this.handleRegularResponse(response, respStream);
+    }
+  }
+
+  /**
+   * Extracts multipart boundary from the HTTP header. The content-type header of a multipart
+   * response has the form 'multipart/subtype; boundary=string'.
+   *
+   * If the content-type header does not exist, or does not start with
+   * 'multipart/', then null will be returned.
+   */
+  private getMultipartBoundary(headers: http.IncomingHttpHeaders): string | null {
+    const contentType = headers['content-type'];
+    if (!contentType || !contentType.startsWith('multipart/')) {
+      return null;
+    }
+
+    const segments: string[] = contentType.split(';');
+    const emptyObject: {[key: string]: string} = {};
+    const headerParams = segments.slice(1)
+      .map((segment) => segment.trim().split('='))
+      .reduce((curr, params) => {
+        // Parse key=value pairs in the content-type header into properties of an object.
+        if (params.length === 2) {
+          const keyValuePair: {[key: string]: string} = {};
+          keyValuePair[params[0]] = params[1];
+          return Object.assign(curr, keyValuePair);
+        }
+        return curr;
+      }, emptyObject);
+
+    return headerParams.boundary;
+  }
+
+  private uncompressResponse(res: http.IncomingMessage): Readable {
+    // Uncompress the response body transparently if required.
+    let respStream: Readable = res;
+    const encodings = ['gzip', 'compress', 'deflate'];
+    if (res.headers['content-encoding'] && encodings.indexOf(res.headers['content-encoding']) !== -1) {
+      // Add the unzipper to the body stream processing pipeline.
+      const zlib: typeof zlibmod = require('zlib'); // eslint-disable-line @typescript-eslint/no-var-requires
+      respStream = respStream.pipe(zlib.createUnzip());
+      // Remove the content-encoding in order to not confuse downstream operations.
+      delete res.headers['content-encoding'];
+    }
+    return respStream;
+  }
+
+  private handleMultipartResponse(
+    response: LowLevelResponse, respStream: Readable, boundary: string): void {
+
+    const busboy = require('@fastify/busboy'); // eslint-disable-line @typescript-eslint/no-var-requires
+    const multipartParser = new busboy.Dicer({ boundary });
+    const responseBuffer: Buffer[] = [];
+    multipartParser.on('part', (part: any) => {
+      const tempBuffers: Buffer[] = [];
+
+      part.on('data', (partData: Buffer) => {
+        tempBuffers.push(partData);
+      });
+
+      part.on('end', () => {
+        responseBuffer.push(Buffer.concat(tempBuffers));
+      });
+    });
+
+    multipartParser.on('finish', () => {
+      response.data = undefined;
+      response.multipart = responseBuffer;
+      this.finalizeResponse(response);
+    });
+
+    respStream.pipe(multipartParser);
+  }
+
+  private handleRegularResponse(response: LowLevelResponse, respStream: Readable): void {
+    const responseBuffer: Buffer[] = [];
+    respStream.on('data', (chunk: Buffer) => {
+      responseBuffer.push(chunk);
+    });
+
+    respStream.on('error', (err) => {
+      const req: http.ClientRequest | null = response.request;
+      if (req && req.aborted) {
+        return;
+      }
+      this.enhanceAndReject(err, null, req);
+    });
+
+    respStream.on('end', () => {
+      response.data = Buffer.concat(responseBuffer).toString();
+      this.finalizeResponse(response);
+    });
+  }
+
+  /**
+   * Finalizes the current HTTP call in-flight by either resolving or rejecting the associated
+   * promise. In the event of an error, adds additional useful information to the returned error.
+   */
+  private finalizeResponse(response: LowLevelResponse): void {
+    if (response.status >= 200 && response.status < 300) {
       this.resolve(response);
     })).catch(e => this.rejectWithError(e));
   }
